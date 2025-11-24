@@ -1,2 +1,4 @@
 *.exe
 *.md
+__pycache__/sc64_lists_command_options.cpython-313.pyc
+__pycache__/exec_runner.cpython-313.pyc
