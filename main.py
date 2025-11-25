@@ -30,6 +30,7 @@ class SC64MainWidget(QWidget):
         self.group_output_layout.addWidget(self.clear_output_button, 0, 1, 1, 1)
         self.run_command_button = QPushButton("Run Command")
         self.run_command_button.setEnabled(False)
+        self.filename_savepath = None
 
         
         self.exe_label = QLabel("No .exe selected.")
@@ -138,6 +139,7 @@ class SC64MainWidget(QWidget):
             ## section for "upload" command (needs by default a path to ROM file)
             i = 0
             line_edit_of_rom = None
+            params = None
             if command == "upload" or command == "download" or command == "64dd":
                 line_edit_of_rom = QLineEdit()
                 line_edit_of_rom.setPlaceholderText("Path to ROM file")
@@ -177,6 +179,7 @@ class SC64MainWidget(QWidget):
                 if option[2] > 0:
                     type_of_param: Types = option[3]
                     btn = None
+                    btn2 = None
                     if type_of_param == Types.TEXT:
                         btn = QLineEdit()
                         btn.setPlaceholderText(option[4])
@@ -193,14 +196,36 @@ class SC64MainWidget(QWidget):
                         btn = QPushButton("Save File As...")
                         btn.setToolTip(option[4])
                         fdOptions = QFileDialog.Option.ShowDirsOnly
-                        btn.clicked.connect(lambda _,: self.enable_run_button(command, f"{option[1]} {QFileDialog.getSaveFileName(self, "Location selection", "All Files(*)", options = fdOptions)[0]}") if command else "")                
+                        btn.clicked.connect(lambda _,: self.enable_run_button(command, f"{option[1]} {shlex.quote(self.set_save_file_path())}") if command else "")                
+                    elif type_of_param == Types.PATH_SD:
+                        btn = QLineEdit()
+                        btn.setPlaceholderText("Path on SD Card (\"/\" for root)")
+                        btn.textChanged.connect(lambda _: self.enable_run_button(command, f"{option[1]} {shlex.quote(btn.text())}"))
+                    elif type_of_param == Types.PATH_SD_DUO:
+                        btn = QLineEdit()
+                        btn.setPlaceholderText("Path SOURCE on SD Card (\"/\" for root)")
+                        btn.textChanged.connect(lambda _: self.enable_run_button(command, f"{option[1]} {shlex.quote(btn.text())} {shlex.quote(btn2.text())}"))
+                        btn2 = QLineEdit()
+                        btn2.setPlaceholderText("Path DESTINATION on SD Card (\"/\" for root)")
+                        btn2.textChanged.connect(lambda _: self.enable_run_button(command, f"{option[1]} {shlex.quote(btn.text())} {shlex.quote(btn2.text())}"))
+                    elif type_of_param == Types.PATH_SD_PC:
+                        btn = QLineEdit()
+                        btn.setPlaceholderText("Path SOURCE on SD Card (\"/\" for root)")
+                        btn.textChanged.connect(lambda _: self.enable_run_button(command, f"{option[1]} {shlex.quote(btn.text())} {shlex.quote(self.filename_savepath)}") if command else "")
+                        btn2 = QPushButton("Save File As...")
+                        btn2.setToolTip(option[4])
+                        btn2.clicked.connect(lambda _,: self.enable_run_button(command, f"{option[1]} {shlex.quote(btn.text())} {shlex.quote(self.set_save_file_path())}") if command else "")
                     elif type_of_param == Types.SPINNER:
                         btn = QSpinBox()
                         btn.setRange(0, 65535)
                     elif type_of_param == Types.ADDRESS:
                         btn = QLineEdit()
                         btn.setPlaceholderText("Enter address")
-                    self.parameter_layout.addWidget(btn, i, j)
+                    self.parameter_layout.addWidget(btn, i, j, 1, 3)
+                    if btn2:
+                        i += 1
+                        j = 0
+                        self.parameter_layout.addWidget(btn2, i, j, 1, 3)
                     j += 1
                     if j >= 4:
                         j = 0
@@ -211,6 +236,13 @@ class SC64MainWidget(QWidget):
             self.enable_run_button(command, option[1])
 
 
+    ### Utilites PART ###
+    def set_save_file_path(self) -> str:
+        fdOptions = QFileDialog.Option.ShowDirsOnly
+        self.filename_savepath = QFileDialog.getSaveFileName(self, "Location selection", "", "All Files(*)", options = fdOptions)[0]
+        return self.filename_savepath
+
+    ### END UTILITIES PART ###
 
     ### PROCESS PART ###
 
@@ -277,7 +309,11 @@ class SC64MainWidget(QWidget):
         self.worker.finished.connect(self.process_finished)
         self.worker_thread.started.connect(self.worker.run)
         self.worker_thread.start()
+        self.reset_self_vars()
 
+
+    def reset_self_vars(self):
+        self.filename_savepath = None
 
     ### END PROCESS PART ###
 

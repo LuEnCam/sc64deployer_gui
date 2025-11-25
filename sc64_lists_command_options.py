@@ -12,6 +12,9 @@ class Types(Enum):
     PATH_HEX_4 = 9
     PATH_SET_LOCATION = 10
     PATH_SD = 11
+    PATH_SD_DUO = 12 # two paths: source and destination on the SD card
+    PATH_PC_SD = 13  # two paths: source on PC and destination on the SD card
+    PATH_SD_PC = 14  # two paths: source on SD card and destination on PC
 
 list_of_commands = [
     ["list", "List connected SC64 devices"],
@@ -79,10 +82,10 @@ list_of_options = [
 
     ["sd", "ls", 1, Types.PATH_SD, "List files of a directory <PATH> on the SD card"],
     ["sd", "stat", 1, Types.PATH_SD, "Display a file or directory status <PATH>"],
-    ["sd", "mv", 2, Types.PATH_SD, "Move or rename a file or directory <SOURCE> to <DESTINATION>"],
+    ["sd", "mv", 2, Types.PATH_SD_DUO, "Move or rename a file or directory <SOURCE> to <DESTINATION>"],
     ["sd", "rm", 1, Types.PATH_SD, "Remove a file or empty directory <PATH>"],
-    ["sd", "download", 2, Types.PATH_SD, "Download a file <SOURCE> from the SD card to the PC <DESTINATION>"],
-    ["sd", "upload", 2, Types.PATH_SD, "Upload a file <SOURCE> from the PC to the SD card <DESTINATION>"],
+    ["sd", "download", 2, Types.PATH_SD_PC, "Download a file <SOURCE> from the SD card to the PC <DESTINATION>"],
+    ["sd", "upload", 2, Types.PATH_PC_SD, "Upload a file <SOURCE> from the PC to the SD card <DESTINATION>"],
     ["sd", "mkfs", 0, None, "Format the SD card"],
 
     # info don't have options
