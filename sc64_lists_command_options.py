@@ -19,7 +19,7 @@ class Types(Enum):
 list_of_commands = [
     ["list", "List connected SC64 devices"],
     ["upload", "Upload ROM (and save) to the SC64"], 
-    ["download", "Download specific memory region and write it to file"], 
+    #["download", "Download specific memory region and write it to file"], 
     ["64dd", "Upload ROM (and save), 64DD IPL then run disk/debug server"], 
     ["debug", "Enter debug mode"], 
     ["dump", "Dump data from arbitrary location in SC64 memory space"], 

@@ -3,7 +3,7 @@ import shlex
 from PyQt6.QtWidgets import ( 
     QApplication, QWidget, QGridLayout, QPushButton, QTextEdit, QLineEdit, QSpinBox,
     QHBoxLayout, QFileDialog, QLabel, QVBoxLayout, QMainWindow, 
-    QGroupBox, QMenu, QWidgetAction
+    QGroupBox, QMenu, QWidgetAction, QMessageBox
 )
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtCore import QThread, QSettings, QSize
@@ -11,6 +11,13 @@ from exec_runner import ExecWorker
 
 from sc64_lists_command_options import list_of_commands, list_of_options, list_of_parameters
 from sc64_lists_command_options import Types
+import os
+import tempfile
+import zipfile
+import requests
+from packaging import version  # pip install packaging
+
+SC64_GITHUB_API_LATEST = "https://api.github.com/repos/Polprzewodnikowy/SummerCart64/releases/latest"
 
 class SC64MainWidget(QWidget):
     def __init__(self):
@@ -359,6 +366,141 @@ class SC64MainWidget(QWidget):
         for i in reversed(range(self.parameter_layout.count())): 
             self.parameter_layout.itemAt(i).widget().setParent(None)
 
+    def check_deployer_update(self):
+        system_name = sys.platform
+        if system_name.startswith("win"):
+            system_name = "windows"
+        if system_name.startswith("linux"):
+            system_name = "linux"
+        if system_name.startswith("darwin"):
+            system_name = "macos"
+        print(f"Checking for updates on system: {system_name}")
+        try:
+            resp = requests.get(SC64_GITHUB_API_LATEST, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+
+            latest_tag = data["tag_name"]          # e.g. "v1.2.3"
+            latest_version = latest_tag.lstrip("v")  # -> "1.2.3"
+
+            local_version = self.exe_version_label.toPlainText().replace("Version: sc64deployer ", "").strip()
+            print(f"Local version: {local_version}")
+            LOCAL_VERSION = local_version if local_version != "Version: N/A" else "0.0"
+
+            # Find the .exe asset download URL
+            exe_asset = None
+            for asset in data.get("assets", []):
+                if system_name in asset["name"]:
+                    exe_asset = asset
+                    break
+
+            if not exe_asset:
+                print("No .exe asset found in latest release.")
+                return None, None, None
+
+            download_url = exe_asset["browser_download_url"]
+
+            if version.parse(latest_version) > version.parse(LOCAL_VERSION):
+                print(f"New version available: {latest_version}")
+                print(f"Download URL: {download_url}")
+                return latest_version, download_url, data
+            else:
+                print("Already up to date.")
+                return None, None, data
+
+        except Exception as e:
+            print(f"Could not check for updates: {e}")
+            return None, None, None
+
+
+    def on_check_updates_clicked(self):
+        latest, url, _ = self.check_deployer_update()
+
+        can_download = False
+        if latest:
+            text = (
+                f"A new version {latest} is available.\n\n"
+                f"Download URL:\n{url}"
+            )
+            can_download = True
+        else:
+            text = "You already have the latest version."
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setWindowTitle("Update check")
+        msg.setText(text)
+
+        if can_download:
+            msg.setInformativeText("Click OK to download and unpack the new version.")
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok |
+                                QMessageBox.StandardButton.Cancel)
+            ret = msg.exec()
+
+            if ret == QMessageBox.StandardButton.Ok:
+                # 1) Ask user where to extract
+                target_dir = QFileDialog.getExistingDirectory(
+                    self,
+                    "Choose folder to unpack the new version"
+                )
+                if not target_dir:
+                    return  # user cancelled
+
+                try:
+                    # 2) Download zip
+                    zip_path = self.download_zip(url)
+
+                    # 3) Extract
+                    self.extract_zip(zip_path, target_dir)
+
+                    # 4) Tell user
+                    done = QMessageBox(self)
+                    done.setIcon(QMessageBox.Icon.Information)
+                    done.setWindowTitle("Update completed")
+                    done.setText(f"New version {latest} has been unpacked to:\n{target_dir}")
+                    done.setStandardButtons(QMessageBox.StandardButton.Ok)
+                    done.exec()
+
+                except Exception as e:
+                    err = QMessageBox(self)
+                    err.setIcon(QMessageBox.Icon.Critical)
+                    err.setWindowTitle("Update failed")
+                    err.setText("An error occurred while downloading or unpacking the update.")
+                    err.setInformativeText(str(e))
+                    err.setStandardButtons(QMessageBox.StandardButton.Ok)
+                    err.exec()
+
+            return
+
+        else:
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
+
+    def download_zip(self, url: str) -> str:
+        """
+        Download the zip from `url` to a temp file.
+        Returns the path to the temp zip file.
+        """
+        fd, temp_path = tempfile.mkstemp(suffix=".zip")
+        os.close(fd)  # we will reopen it normally
+
+        resp = requests.get(url, stream=True)
+        resp.raise_for_status()
+
+        with open(temp_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        return temp_path
+
+
+    def extract_zip(self, zip_path: str, target_dir: str) -> None:
+        """
+        Extract all contents of `zip_path` into `target_dir`.
+        """
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(target_dir)
 
 class SC64MainWindow():
     def __init__(self):
@@ -374,6 +516,11 @@ class SC64MainWindow():
         self.select_exe_action.setText("Select sc64deployer.exe")
         self.select_exe_action.triggered.connect(self.main_widget.select_exe)
 
+        self.check_deployer_update = QWidgetAction(self.window)
+        self.check_deployer_update.setText("Verify update for sc64deployer.exe")
+        self.check_deployer_update.triggered.connect(self.main_widget.on_check_updates_clicked)
+
+
         self.exe_version = QMenu(self.main_widget.exe_version_label.toPlainText())
         self.exe_version.setDisabled(True)
 
@@ -383,9 +530,12 @@ class SC64MainWindow():
         
         self.file_menu = QMenu("File")
         self.file_menu.addAction(self.select_exe_action)
+        self.help_menu = QMenu("Help")
+        self.help_menu.addAction(self.check_deployer_update)
 
         self.window.menuBar().setNativeMenuBar(True)
         self.window.menuBar().addMenu(self.file_menu)
+        self.window.menuBar().addMenu(self.help_menu)
         self.window.menuBar().addMenu(self.exe_version)
 
         self.window.statusBar().addPermanentWidget(self.main_widget.exe_label, 1)
