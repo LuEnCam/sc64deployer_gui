@@ -1,5 +1,6 @@
 import sys
 import shlex
+import time
 from PyQt6.QtWidgets import ( 
     QApplication, QWidget, QGridLayout, QPushButton, QTextEdit, QLineEdit, QSpinBox,
     QHBoxLayout, QFileDialog, QLabel, QVBoxLayout, QMainWindow, 
@@ -16,12 +17,18 @@ import tempfile
 import zipfile
 import requests
 from packaging import version  # pip install packaging
+from pathlib import Path
 
 SC64_GITHUB_API_LATEST = "https://api.github.com/repos/Polprzewodnikowy/SummerCart64/releases/latest"
+SC64MENU_GITHUB_API_LATEST = "https://api.github.com/repos/Polprzewodnikowy/N64FlashcartMenu/releases/latest"
 
 class SC64MainWidget(QWidget):
     def __init__(self):
         QWidget.__init__(self) # call the superclass constructor
+
+        self.current_path = os.getcwd()
+
+        print(f"Current path: {self.current_path}")
 
         self.glayout = QGridLayout()
 
@@ -89,7 +96,16 @@ class SC64MainWidget(QWidget):
         for b in button_list:
             b.setStyleSheet("")
         
-        btn.setStyleSheet("background-color: green;")
+        if btn:
+            btn.setStyleSheet("background-color: green;")
+
+    def disable_buttons(self):
+        for btn in self.buttons:
+            btn.setEnabled(False)
+
+    def enable_buttons(self):
+        for btn in self.buttons:
+            btn.setEnabled(True)
 
     def select_exe(self):
         exe_path, _ = QFileDialog.getOpenFileName(self, "Select sc64deployer.exe", "", "Executables (*.exe)")
@@ -99,10 +115,25 @@ class SC64MainWidget(QWidget):
 
     def check_set_exe(self):
         if self.exe_path:
+            if self.exe_path and not "sc64deployer" in os.path.basename(self.exe_path):
+                self.exe_version_label.setText("Version: N/A")
+                self.exe_path = None
+                self.clear_parameter_layout()
+                self.clear_options_layout()
+                self.text_output.clear()
+                self.update_button_color(None, self.buttons)
+                self.disable_buttons()
+                self.disable_run_button()
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Critical)
+                msg.setWindowTitle("Invalid deployer")
+                msg.setText("The selected deployer is not the sc64deployer")
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg.exec()
+                return
             self.exe_label.setText(f"Path of exe: {self.exe_path}")
             self.start_worker("--version", notify=False)
-            for btn in self.buttons:
-                btn.setEnabled(True)
+            self.enable_buttons()
 
 
     def list_options(self, command):
@@ -279,8 +310,7 @@ class SC64MainWidget(QWidget):
         cmd = sender.text()
         self.text_output.append(f"\n[CMD] {cmd}")
         self.text_output.moveCursor(QTextCursor.MoveOperation.End)
-        for btn in self.buttons:
-            btn.setEnabled(False)
+        self.disable_buttons()
         self.start_worker(cmd)
 
     def run_command(self, command, options=""):
@@ -295,8 +325,7 @@ class SC64MainWidget(QWidget):
                     options = ' '.join(list(options.split())[1:])
         self.text_output.append(f"\n[CMD] {command} {options}")
         self.text_output.moveCursor(QTextCursor.MoveOperation.End)
-        for btn in self.buttons:
-            btn.setEnabled(False)
+        self.disable_buttons()
 
         self.start_worker(command, options=options)
 
@@ -350,8 +379,7 @@ class SC64MainWidget(QWidget):
 
 
     def process_finished(self):
-        for btn in self.buttons:
-            btn.setEnabled(True)
+        self.enable_buttons()
         if self.worker_thread:
             self.worker_thread.quit()
             self.worker_thread.wait()
@@ -411,6 +439,134 @@ class SC64MainWidget(QWidget):
         except Exception as e:
             print(f"Could not check for updates: {e}")
             return None, None, None
+        
+    def find_bytes_offset(self, file_path: str, hex_string: str):
+        # Convert hex string → bytes
+        pattern = bytes.fromhex(hex_string)
+
+        with open(file_path, "rb") as f:
+            data = f.read()  # read entire file into memory
+
+        # Find offset
+        offset = data.find(pattern)
+        return offset  # -1 if not found
+    
+    # TODO 
+    def on_check_update_sc64menu_clicked(self):
+        path = "temp.n64"
+        self.start_worker("sd", f"download /sc64menu.n64 {path}", notify=True)
+        time.sleep(1)  # wait for download to complete
+
+        if not os.path.exists(path):
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Critical)
+            msg.setWindowTitle("Update check")
+            msg.setText("Could not find sc64menu.n64 on the SD card.")
+            msg.setInformativeText("Please make sure:\n " \
+            "- sc64menu.n64 is present on the SD card.\n" \
+            "- The SD card is properly inserted into the SC64 device.\n" \
+            "- The SC64 device is connected to your device through USB and powered OFF.")
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
+            return
+
+        hex_pattern = "4D49543200F30C0000"  # same as your sequence, no spaces
+        offset = self.find_bytes_offset(path, hex_pattern)
+
+        if offset != -1:
+            print(f"Found at offset: 0x{offset:08X} ({offset} decimal)")
+        else:
+            print("Pattern not found.")
+            return
+        
+        address = offset + 9 # offset to version string
+        print(f"Version string address: 0x{address:08X}")
+
+        with open(path, "rb") as f:
+            f.seek(address)          # jump to offset
+            data = f.read(10)         # read 10 bytes
+        date_on_current_version = data.decode("ascii", errors="replace")
+        print(date_on_current_version)
+
+        try:
+            resp = requests.get(SC64MENU_GITHUB_API_LATEST, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+
+            body_value = data.get("body")
+
+            # Extract version from body text (on line built from latest commit on main branch as of xxx-yy-zz)
+            latest_version = None
+            for line in body_value.splitlines():
+                if line.startswith("built from latest commit on main branch as of"):
+                    latest_version = line.replace("built from latest commit on main branch as of", "").strip()
+                    latest_version = latest_version.replace(".", "").strip()
+                    break
+            if not latest_version:
+                print("Could not find version in release notes.")
+                return
+            
+            print(f"Latest sc64menu version found online: {latest_version}")
+
+            if int(latest_version.replace("-","")) > int(date_on_current_version.replace("-","")):
+                download_url = None
+                for asset in data.get("assets", []):
+                    if "sc64menu.n64" in asset["name"]:
+                        download_url = asset["browser_download_url"]
+                        break
+                text = (
+                    f"A new version of sc64menu.n64 is available.\n\n"
+                    f"Current version date: {date_on_current_version}\n"
+                    f"Latest version date: {latest_version}\n\n"
+                    f"Download URL:\n{download_url}"
+                )
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Information)
+                msg.setWindowTitle("sc64menu Update available")
+                msg.setText(text)
+                msg.setInformativeText("Click OK to download and unpack the new version.")
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok |
+                                    QMessageBox.StandardButton.Cancel)
+                ret = msg.exec()
+
+                if ret == QMessageBox.StandardButton.Ok:
+                    fd, temp_path = tempfile.mkstemp(suffix=".n64")
+                    os.close(fd)  # we will reopen it normally
+
+                    resp = requests.get(download_url, stream=True)
+                    resp.raise_for_status()
+
+                    with open(temp_path, "wb") as f:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+
+                    # save file (not asking for location, just overwrite)
+                    self.start_worker("sd", f"upload {shlex.quote(temp_path)} /sc64menu.n64", notify=True)
+
+                    msg = QMessageBox(self)
+                    msg.setIcon(QMessageBox.Icon.Information)
+                    msg.setWindowTitle("Update check")
+                    msg.setText("sc64menu.n64 has been updated on the SD card.")
+                    msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                    msg.exec()
+
+            else:
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Information)
+                msg.setWindowTitle("Update check")
+                msg.setText(f"You already have the latest version of sc64menu.n64.")
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg.exec()
+
+            os.remove(path)
+                    
+
+
+        except Exception as e:
+            print(f"Could not check for updates: {e}")
+            return None, None, None
+        
 
 
     def on_check_updates_clicked(self):
@@ -424,7 +580,7 @@ class SC64MainWidget(QWidget):
             )
             can_download = True
         else:
-            text = "You already have the latest version."
+            text = f"You already have the latest version of the sc64deployer."
 
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Icon.Information)
@@ -513,12 +669,16 @@ class SC64MainWindow():
         self.window.setCentralWidget(self.main_widget)
 
         self.select_exe_action = QWidgetAction(self.window)
-        self.select_exe_action.setText("Select sc64deployer.exe")
+        self.select_exe_action.setText("Select sc64deployer")
         self.select_exe_action.triggered.connect(self.main_widget.select_exe)
 
         self.check_deployer_update = QWidgetAction(self.window)
-        self.check_deployer_update.setText("Verify update for sc64deployer.exe")
+        self.check_deployer_update.setText("Verify update for sc64deployer")
         self.check_deployer_update.triggered.connect(self.main_widget.on_check_updates_clicked)
+
+        self.check_sc64menu_update = QWidgetAction(self.window)
+        self.check_sc64menu_update.setText("Verify update for sc6sc64menu.n64")
+        self.check_sc64menu_update.triggered.connect(self.main_widget.on_check_update_sc64menu_clicked)
 
 
         self.exe_version = QMenu(self.main_widget.exe_version_label.toPlainText())
@@ -532,6 +692,7 @@ class SC64MainWindow():
         self.file_menu.addAction(self.select_exe_action)
         self.help_menu = QMenu("Help")
         self.help_menu.addAction(self.check_deployer_update)
+        self.help_menu.addAction(self.check_sc64menu_update)
 
         self.window.menuBar().setNativeMenuBar(True)
         self.window.menuBar().addMenu(self.file_menu)
