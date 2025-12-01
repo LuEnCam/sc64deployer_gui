@@ -14,7 +14,7 @@ from sc64_lists_command_options import list_of_commands, list_of_options, list_o
 from sc64_lists_command_options import Types
 import os
 import tempfile
-import zipfile
+import zipfile, tarfile
 import requests
 from packaging import version  # pip install packaging
 from pathlib import Path
@@ -25,6 +25,14 @@ SC64MENU_GITHUB_API_LATEST = "https://api.github.com/repos/Polprzewodnikowy/N64F
 class SC64MainWidget(QWidget):
     def __init__(self):
         QWidget.__init__(self) # call the superclass constructor
+
+        self.SYSTEM_NAME = sys.platform
+        if self.SYSTEM_NAME.startswith("win"):
+            self.SYSTEM_NAME = "windows"
+        elif self.SYSTEM_NAME.startswith("linux"):
+            self.SYSTEM_NAME = "linux"
+        elif self.SYSTEM_NAME.startswith("darwin"):
+            self.SYSTEM_NAME = "macos"
 
         self.current_path = os.getcwd()
 
@@ -108,14 +116,17 @@ class SC64MainWidget(QWidget):
             btn.setEnabled(True)
 
     def select_exe(self):
-        exe_path, _ = QFileDialog.getOpenFileName(self, "Select sc64deployer.exe", "", "Executables (*.exe)")
+        if self.SYSTEM_NAME == "windows":
+            exe_path, _ = QFileDialog.getOpenFileName(self, "Select sc64deployer.exe", "", "Executables (*.exe)")
+        elif self.SYSTEM_NAME == "linux" or self.SYSTEM_NAME == "macos":
+            exe_path, _ = QFileDialog.getOpenFileName(self, "Select sc64deployer executable", "", "All Files(*)")
         if exe_path:
             self.exe_path = exe_path
             self.check_set_exe()
 
     def check_set_exe(self):
         if self.exe_path:
-            if self.exe_path and not "sc64deployer" in os.path.basename(self.exe_path):
+            if self.exe_path and (not "sc64deployer" in os.path.basename(self.exe_path) or "sc64deployer_gui" in os.path.basename(self.exe_path)):
                 self.exe_version_label.setText("Version: N/A")
                 self.exe_path = None
                 self.clear_parameter_layout()
@@ -337,7 +348,10 @@ class SC64MainWidget(QWidget):
             self.worker_thread.wait()
         # Set up new worker and thread
         args = shlex.split(options) if options else []
-        self.worker = ExecWorker(self.exe_path, command, args)
+        if not self.worker:
+            self.worker = ExecWorker(self.exe_path, command, args)
+        else:
+            self.worker.set_properties(self.exe_path, command, args)
         self.worker_thread = QThread()
         self.worker.moveToThread(self.worker_thread)
         self.worker.output.connect(self.append_output)
@@ -395,14 +409,7 @@ class SC64MainWidget(QWidget):
             self.parameter_layout.itemAt(i).widget().setParent(None)
 
     def check_deployer_update(self):
-        system_name = sys.platform
-        if system_name.startswith("win"):
-            system_name = "windows"
-        if system_name.startswith("linux"):
-            system_name = "linux"
-        if system_name.startswith("darwin"):
-            system_name = "macos"
-        print(f"Checking for updates on system: {system_name}")
+        print(f"Checking for updates on system: {self.SYSTEM_NAME}")
         try:
             resp = requests.get(SC64_GITHUB_API_LATEST, timeout=5)
             resp.raise_for_status()
@@ -418,7 +425,7 @@ class SC64MainWidget(QWidget):
             # Find the .exe asset download URL
             exe_asset = None
             for asset in data.get("assets", []):
-                if system_name in asset["name"]:
+                if self.SYSTEM_NAME in asset["name"]:
                     exe_asset = asset
                     break
 
@@ -634,13 +641,14 @@ class SC64MainWidget(QWidget):
 
     def download_zip(self, url: str) -> str:
         """
-        Download the zip from `url` to a temp file.
-        Returns the path to the temp zip file.
+        Download an archive (zip or tar.gz) from `url` to a temp file.
+        Returns the path to the temp file.
         """
-        fd, temp_path = tempfile.mkstemp(suffix=".zip")
-        os.close(fd)  # we will reopen it normally
+        # Use a neutral suffix; extension doesn't matter to Python
+        fd, temp_path = tempfile.mkstemp()
+        os.close(fd)
 
-        resp = requests.get(url, stream=True)
+        resp = requests.get(url, stream=True, timeout=30)
         resp.raise_for_status()
 
         with open(temp_path, "wb") as f:
@@ -651,12 +659,19 @@ class SC64MainWidget(QWidget):
         return temp_path
 
 
-    def extract_zip(self, zip_path: str, target_dir: str) -> None:
+    def extract_zip(self, archive_path: str, target_dir: str) -> None:
         """
-        Extract all contents of `zip_path` into `target_dir`.
+        Extract either a .zip or .tar.gz (or .tar) into target_dir.
         """
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(target_dir)
+        if zipfile.is_zipfile(archive_path):
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                zf.extractall(target_dir)
+        elif tarfile.is_tarfile(archive_path):
+            # tarfile auto-detects gzip, bzip2, etc.
+            with tarfile.open(archive_path, "r:*") as tf:
+                tf.extractall(target_dir)
+        else:
+            raise ValueError(f"File '{archive_path}' is not a valid zip or tar archive")
 
 class SC64MainWindow():
     def __init__(self):
@@ -721,6 +736,7 @@ class SC64MainWindow():
 
     def read_settings(self):
         settings = QSettings("SC64 deployer Gui", "Settings")
+        print(f"settings: {settings.fileName()}")
         settings.beginGroup("MainWindow")
         self.main_widget.exe_path = settings.value("exe_path", None)
         self.window.resize(settings.value("size", QSize(800, 600)))
@@ -732,7 +748,6 @@ class SC64MainWindow():
         self.window.show()
         self.app.exec()
         self.write_settings()
-
 
 
 app = SC64MainWindow()

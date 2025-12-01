@@ -1,7 +1,7 @@
 # exec_runner.py
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
-import subprocess
+import subprocess, sys
 
 class ExecWorker(QObject):
     output = pyqtSignal(str)
@@ -15,9 +15,19 @@ class ExecWorker(QObject):
         self.options = options or []
         self._process = None
 
+    def set_properties(self, exe_path, command, options=None):
+        self.exe_path = exe_path
+        self.command = command
+        self.options = options or []
+
     def run(self):
         try:
-            cmd = [self.exe_path, self.command] + self.options
+            cmd = []
+            if sys.platform.startswith("linux"):
+                cmd.append("pkexec")  # uses PolicyKit, shows a dialog
+
+            cmd.extend([self.exe_path, self.command])
+            cmd.extend(self.options)
             self._process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
