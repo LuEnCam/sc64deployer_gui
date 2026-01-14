@@ -1,5 +1,5 @@
 *.exe
-*.md
+TODO.md
 __pycache__/
 /build
 /dist

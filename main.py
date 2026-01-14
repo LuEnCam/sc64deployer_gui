@@ -1,3 +1,4 @@
+import pathlib
 import sys
 import shlex
 import time
@@ -40,7 +41,7 @@ class SC64MainWidget(QWidget):
 
         self.glayout = QGridLayout()
 
-        self.group_output = QGroupBox("Console Output")
+        self.group_output = QGroupBox("Sc64deployer Output")
         self.group_output_layout = QGridLayout()
         self.group_output.setLayout(self.group_output_layout)
         self.text_output = QTextEdit()
@@ -316,12 +317,12 @@ class SC64MainWidget(QWidget):
 
     def enable_run_button(self, command):
         self.run_command_button.setEnabled(True)
-        self.run_command_button.setStyleSheet("background-color: lightgreen;")
+        self.run_command_button.setStyleSheet("background-color: green;")
         self.run_command_button.clicked.connect(lambda: self.run_command(command))
 
     def enable_run_button(self, command, options=""):
         self.run_command_button.setEnabled(True)
-        self.run_command_button.setStyleSheet("background-color: lightgreen;")
+        self.run_command_button.setStyleSheet("background-color: green;")
         if self.run_command_button.receivers(self.run_command_button.clicked) > 0:
             self.run_command_button.clicked.disconnect()
         self.run_command_button.clicked.connect(lambda: self.run_command(command, options))
@@ -490,7 +491,11 @@ class SC64MainWidget(QWidget):
     
     # TODO 
     def on_check_update_sc64menu_clicked(self):
-        path = "temp.n64"
+        path = ''
+        if self.SYSTEM_NAME == "windows":
+            path = "temp.n64"
+        else:
+            path = pathlib.Path.home() / "temp.n64"
         #self.start_worker("sd", f"download /sc64menu.n64 {path}", notify=True)
         self.start_worker(
             "sd",
@@ -500,20 +505,26 @@ class SC64MainWidget(QWidget):
         )
         
     def do_next_thing(self):
-        path = "temp.n64"
+        path = ''
+        if self.SYSTEM_NAME == "windows":
+            path = "temp.n64"
+        else:
+            path = pathlib.Path.home() / "temp.n64"
         if not os.path.exists(path):
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Icon.Critical)
             msg.setWindowTitle("Update check")
             msg.setText("Could not find sc64menu.n64 on the SD card.")
-            msg.setInformativeText("Please make sure:\n " \
+            msg.setInformativeText("Please make sure:\n" \
+            "- You're using the sc64deployer version v2.20.0 or newer.\n" \
             "- sc64menu.n64 is present on the SD card.\n" \
             "- The SD card is properly inserted into the SC64 device.\n" \
-            "- The SC64 device is connected to your device through USB and powered OFF.")
+            "- The SC64 device is connected to your device through USB.\n" \
+            "- If the SC64 is connected to a N64 that the console is powered OFF.")
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg.exec()
             return
-
+                        
         hex_pattern = "4D49543200F30C0000"  # same as your sequence, no spaces
         offset = self.find_bytes_offset(path, hex_pattern)
         second_offset = 0
@@ -536,14 +547,21 @@ class SC64MainWidget(QWidget):
                     print(f"Found at offset: 0x{offset:08X} ({offset} decimal)")
                     second_offset = 10
                 else:
-                    print("Pattern not found... sorry...")
-                    msg = QMessageBox(self)
-                    msg.setIcon(QMessageBox.Icon.Critical)
-                    msg.setWindowTitle("Update check")
-                    msg.setText("Could not verify a new version of sc64menu.n64...")
-                    msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-                    msg.exec()
-                    return
+                    print("Pattern not found... retrying...")
+                    hex_pattern = "4D49543200F0080000"
+                    offset = self.find_bytes_offset(path, hex_pattern)
+                    if offset != -1:
+                        print(f"Found at offset: 0x{offset:08X} ({offset} decimal)")
+                        second_offset = 9
+                    else:
+                        print("Pattern not found... sorry...")
+                        msg = QMessageBox(self)
+                        msg.setIcon(QMessageBox.Icon.Critical)
+                        msg.setWindowTitle("Update check")
+                        msg.setText("Could not verify a new version of sc64menu.n64...")
+                        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                        msg.exec()
+                        return
         
         address = offset + second_offset # offset to version string
         print(f"Version string address: 0x{address:08X}")
@@ -592,7 +610,7 @@ class SC64MainWidget(QWidget):
                 msg.setIcon(QMessageBox.Icon.Information)
                 msg.setWindowTitle("sc64menu Update available")
                 msg.setText(text)
-                msg.setInformativeText("Click OK to download and unpack the new version.")
+                msg.setInformativeText("Click OK to download and update the sc64menu.n64 on your summercart64 SD card.")
                 msg.setStandardButtons(QMessageBox.StandardButton.Ok |
                                     QMessageBox.StandardButton.Cancel)
                 ret = msg.exec()
@@ -676,6 +694,14 @@ class SC64MainWidget(QWidget):
                     # 3) Extract
                     self.extract_zip(zip_path, target_dir)
 
+                    if self.SYSTEM_NAME == "windows":
+                        self.exe_path = os.path.join(target_dir, "sc64deployer.exe")
+                        
+                    elif self.SYSTEM_NAME == "linux" or self.SYSTEM_NAME == "macos":
+                        self.exe_path = os.path.join(target_dir, "sc64deployer")
+
+                    self.check_set_exe()
+
                     # 4) Tell user
                     done = QMessageBox(self)
                     done.setIcon(QMessageBox.Icon.Information)
@@ -739,8 +765,8 @@ class SC64MainWindow():
         self.window = QMainWindow()
         self.window.setWindowTitle("sc64deployer GUI")
         self.window.resize(700, 500)
-        # icon_path = os.path.join(sys._MEIPASS, 'sc64.ico')
-        # self.window.setWindowIcon(QIcon(icon_path))
+        #icon_path = os.path.join(sys._MEIPASS, 'sc64.ico')
+        #self.window.setWindowIcon(QIcon(icon_path))
 
         self.main_widget = SC64MainWidget()
         self.window.setCentralWidget(self.main_widget)
