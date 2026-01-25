@@ -32,8 +32,18 @@ class ExecWorker(QObject):
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                stdin=subprocess.PIPE,
                 text=True
             )
+
+
+            if self.command == "firmware" and "update" in self.options:
+                try:
+                    self._process.stdin.write("y\n")
+                    self._process.stdin.flush()
+                except Exception as e:
+                    self.error.emit(f"Failed to send confirmation input: {e}")
+
             # Read stdout
             for line in self._process.stdout:
                 self.output.emit(line)

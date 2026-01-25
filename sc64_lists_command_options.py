@@ -99,7 +99,7 @@ list_of_options = [
     ["firmware", "info", 1, Types.PATH_GET_LOCATION, "Print metadata included inside SC64 firmware file <FIRMWARE>"],  
     ["firmware", "backup", 1, Types.PATH_SET_LOCATION, "Download current SC64 firmware and save it to provided file <FIRMWARE>"],  
     # second argument is optional
-    ["firmware", "update", 2, Types.PATH_RADIO, "Update SC64 firmware from provided file <FIRMWARE>\n --use-flash-memory  Put firmware update in the Flash memory instead of SDRAM"],  
+    ["firmware", "update", 2, Types.PATH_GET_LOCATION, "Update SC64 firmware from provided file <FIRMWARE>\n --use-flash-memory  Put firmware update in the Flash memory instead of SDRAM"],  
 
     # test don't have options
 

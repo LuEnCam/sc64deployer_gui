@@ -39,6 +39,8 @@ class SC64MainWidget(QWidget):
 
         print(f"Current path: {self.current_path}")
 
+        self.latest_version = None
+
         self.glayout = QGridLayout()
 
         self.group_output = QGroupBox("Sc64deployer Output")
@@ -439,6 +441,128 @@ class SC64MainWidget(QWidget):
         for i in reversed(range(self.parameter_layout.count())): 
             self.parameter_layout.itemAt(i).widget().setParent(None)
 
+
+    def check_firmware_update(self):
+        print(f"Checking for firmware updates on system: {self.SYSTEM_NAME}")
+        self.text_output.clear()
+        try:
+            # extracting version from firmware on sc64 cart:
+            self.start_worker(
+                "info",
+                "",
+                notify=True,
+                on_done=self.do_next_thing_firmware
+            )
+
+        except:
+            return None
+
+
+
+    def do_next_thing_firmware(self):
+        # extract firmware version from text output
+        local_firmware_version = "N/A"
+        is_powered_on = False
+        for line in self.text_output.toPlainText().splitlines():
+            if "Current CIC step:" in line:
+                value = line.split("Current CIC step:")[-1].strip()
+                is_powered_on = value != "Power off"
+            if "Firmware version:" in line:
+                local_firmware_version = line.split("Firmware version:")[-1].strip()
+        print(f"sc64 firmware version on console: {local_firmware_version}")
+
+        if local_firmware_version == "N/A" or is_powered_on:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Critical)
+            msg.setWindowTitle("Update check")
+            msg.setText("Could not retrieve sc64 firmware version from your cartridge.")
+            msg.setInformativeText("Please make sure:\n" \
+            "- You have correctly set a sc64deployer to be used with the GUI\n" \
+            "- The SC64 device is connected to your device through USB.\n" \
+            "- If the SC64 is connected to a N64 that the console is powered OFF.")
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
+            return
+
+        local_firmware_version = local_firmware_version.lstrip("v")
+
+        # compare versions
+        try: 
+            resp = requests.get(SC64_GITHUB_API_LATEST, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+
+            latest_tag = data["tag_name"]          # e.g. "v1.2.3"
+            latest_version = latest_tag.lstrip("v")  # -> "1.2.3"
+
+            if version.parse(latest_version) > version.parse(local_firmware_version):
+                print(f"New firmware version available: {latest_version}")
+                download_url = None
+                for asset in data.get("assets", []):
+                    if "sc64-firmware" in asset["name"]:
+                        download_url = asset["browser_download_url"]
+                        break
+                text = (
+                    f"A new version of the sc64 firmware is available.\n\n"
+                    f"Version on your sc64:     {local_firmware_version}\n"
+                    f"Latest version:           {latest_version}\n\n"
+                    f"Download URL:\n{download_url}"
+                )
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Information)
+                msg.setWindowTitle("sc64 firmware Update available")
+                msg.setText(text)
+                msg.setInformativeText("Click OK to download and update the sc64 firmware on your summercart64.")
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok |
+                                    QMessageBox.StandardButton.Cancel)
+                ret = msg.exec()
+
+                if ret == QMessageBox.StandardButton.Ok:
+                    fd, temp_path = tempfile.mkstemp(suffix=".bin")
+                    os.close(fd)  # we will reopen it normally
+
+                    resp = requests.get(download_url, stream=True)
+                    resp.raise_for_status()
+
+                    with open(temp_path, "wb") as f:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+
+                    self.latest_version = latest_version
+
+                    # running the firmware update command
+                    self.start_worker("firmware", f"update {shlex.quote(temp_path)}", notify=True, on_done=self.confirm_update_message)
+
+            else:
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Information)
+                msg.setWindowTitle("Update check")
+                msg.setText("Your sc64 firmware is already up to date (version " + local_firmware_version + ").")
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg.exec()
+
+        except:
+            # inform failed to get update
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Critical)
+            msg.setWindowTitle("Update check")
+            msg.setText("Could not check for firmware updates.")
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            
+            return 
+
+
+    def confirm_update_message(self):
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setWindowTitle("Update check")
+        msg.setText("sc64 firmware has been updated to version " + self.latest_version + ".")
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+
+        self.latest_version = None
+
     def check_deployer_update(self):
         print(f"Checking for updates on system: {self.SYSTEM_NAME}")
         try:
@@ -478,6 +602,7 @@ class SC64MainWidget(QWidget):
             print(f"Could not check for updates: {e}")
             return None, None, None
         
+
     def find_bytes_offset(self, file_path: str, hex_string: str):
         # Convert hex string → bytes
         pattern = bytes.fromhex(hex_string)
@@ -489,7 +614,7 @@ class SC64MainWidget(QWidget):
         offset = data.find(pattern)
         return offset  # -1 if not found
     
-    # TODO 
+
     def on_check_update_sc64menu_clicked(self):
         path = ''
         if self.SYSTEM_NAME == "windows":
@@ -765,8 +890,8 @@ class SC64MainWindow():
         self.window = QMainWindow()
         self.window.setWindowTitle("sc64deployer GUI")
         self.window.resize(700, 500)
-        #icon_path = os.path.join(sys._MEIPASS, 'sc64.ico')
-        #self.window.setWindowIcon(QIcon(icon_path))
+        icon_path = os.path.join(sys._MEIPASS, 'sc64.ico')
+        self.window.setWindowIcon(QIcon(icon_path))
 
         self.main_widget = SC64MainWidget()
         self.window.setCentralWidget(self.main_widget)
@@ -783,6 +908,10 @@ class SC64MainWindow():
         self.check_sc64menu_update.setText("Verify update for sc64menu.n64")
         self.check_sc64menu_update.triggered.connect(self.main_widget.on_check_update_sc64menu_clicked)
 
+        self.check_sc64menu_firmware = QWidgetAction(self.window)
+        self.check_sc64menu_firmware.setText("Verify update for sc64 firmware")
+        self.check_sc64menu_firmware.triggered.connect(self.main_widget.check_firmware_update)
+
 
         self.exe_version = QMenu(self.main_widget.exe_version_label.toPlainText())
         self.exe_version.setDisabled(True)
@@ -796,6 +925,7 @@ class SC64MainWindow():
         self.help_menu = QMenu("Help")
         self.help_menu.addAction(self.check_deployer_update)
         self.help_menu.addAction(self.check_sc64menu_update)
+        self.help_menu.addAction(self.check_sc64menu_firmware)
 
         self.window.menuBar().setNativeMenuBar(True)
         self.window.menuBar().addMenu(self.file_menu)
