@@ -24,7 +24,7 @@ class ExecWorker(QObject):
         try:
             cmd = []
             if sys.platform.startswith("linux"):
-                cmd.append("pkexec")  # uses PolicyKit, shows a dialog
+                cmd = ['sudo', '-n']  # uses PolicyKit, shows a dialog
 
             cmd.extend([self.exe_path, self.command])
             cmd.extend(self.options)

@@ -890,8 +890,8 @@ class SC64MainWindow():
         self.window = QMainWindow()
         self.window.setWindowTitle("sc64deployer GUI")
         self.window.resize(700, 500)
-        icon_path = os.path.join(sys._MEIPASS, 'sc64.ico')
-        self.window.setWindowIcon(QIcon(icon_path))
+        #icon_path = os.path.join(sys._MEIPASS, 'sc64.ico')
+        #self.window.setWindowIcon(QIcon(icon_path))
 
         self.main_widget = SC64MainWidget()
         self.window.setCentralWidget(self.main_widget)
