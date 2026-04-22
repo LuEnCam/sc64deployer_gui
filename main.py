@@ -1,15 +1,15 @@
 import pathlib
 import sys
 import shlex
-import time
 from PyQt6.QtWidgets import ( 
     QApplication, QWidget, QGridLayout, QPushButton, QTextEdit, QLineEdit, QSpinBox,
-    QHBoxLayout, QFileDialog, QLabel, QVBoxLayout, QMainWindow, 
-    QGroupBox, QMenu, QWidgetAction, QMessageBox
+    QFileDialog, QLabel, QMainWindow, 
+    QGroupBox, QMenu, QWidgetAction, QMessageBox, QTabWidget, QVBoxLayout
 )
-from PyQt6.QtGui import QTextCursor, QIcon
+from PyQt6.QtGui import QTextCursor
 from PyQt6.QtCore import QThread, QSettings, QSize
 from exec_runner import ExecWorker
+from sd_explorer import SDCardExplorer
 
 from sc64_lists_command_options import list_of_commands, list_of_options, list_of_parameters
 from sc64_lists_command_options import Types
@@ -18,7 +18,6 @@ import tempfile
 import zipfile, tarfile
 import requests
 from packaging import version  # pip install packaging
-from pathlib import Path
 
 SC64_GITHUB_API_LATEST = "https://api.github.com/repos/Polprzewodnikowy/SummerCart64/releases/latest"
 SC64MENU_GITHUB_API_LATEST = "https://api.github.com/repos/Polprzewodnikowy/N64FlashcartMenu/releases/latest"
@@ -40,8 +39,28 @@ class SC64MainWidget(QWidget):
         print(f"Current path: {self.current_path}")
 
         self.latest_version = None
+        self.exe_path = None
+        self.sd_explorer = None
 
-        self.glayout = QGridLayout()
+        # Create tab widget
+        self.tabs = QTabWidget()
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(self.tabs)
+        self.setLayout(main_layout)
+
+        # Create classic commands widget (the original interface)
+        self.classic_widget = QWidget()
+        self.classic_layout = QGridLayout()
+        self.classic_widget.setLayout(self.classic_layout)
+        self.tabs.addTab(self.classic_widget, "Commands")
+
+        # Placeholder for SD Explorer tab (will be created when exe_path is set)
+        self.sd_explorer_tab = None
+        self.tabs.addTab(QWidget(), "SD Card Explorer")
+        self.tabs.setTabEnabled(1, False)  # Disabled until exe is selected
+
+        # Setup classic command interface on the classic_layout
+        self.glayout = self.classic_layout
 
         self.group_output = QGroupBox("Sc64deployer Output")
         self.group_output_layout = QGridLayout()
@@ -101,8 +120,6 @@ class SC64MainWidget(QWidget):
         self.worker_thread = None
         self.worker = None
 
-        self.setLayout(self.glayout)
-
     def update_button_color(self, btn: QPushButton, button_list):
         for b in button_list:
             b.setStyleSheet("")
@@ -138,6 +155,7 @@ class SC64MainWidget(QWidget):
                 self.update_button_color(None, self.buttons)
                 self.disable_buttons()
                 self.disable_run_button()
+                self.tabs.setTabEnabled(1, False)  # Disable SD Explorer tab
                 msg = QMessageBox(self)
                 msg.setIcon(QMessageBox.Icon.Critical)
                 msg.setWindowTitle("Invalid deployer")
@@ -148,6 +166,10 @@ class SC64MainWidget(QWidget):
             self.exe_label.setText(f"Path of deployer: {self.exe_path}")
             self.start_worker("--version", notify=False)
             self.enable_buttons()
+            
+            # Initialize SD Card Explorer
+            self._init_sd_explorer()
+            self.tabs.setTabEnabled(1, True)  # Enable SD Explorer tab
 
 
     def list_options(self, command):
@@ -425,6 +447,27 @@ class SC64MainWidget(QWidget):
 
     ### END CONSOLE OUTPUT PART ###
 
+    def _init_sd_explorer(self):
+        """Initialize the SD Card Explorer tab"""
+        if self.exe_path:
+            # Create new explorer if not already created or if exe path changed
+            if self.sd_explorer is None or self.sd_explorer.exe_path != self.exe_path:
+                # Remove old explorer from tab if it exists
+                if self.tabs.widget(1) is not None and self.tabs.widget(1) != self.sd_explorer:
+                    self.tabs.removeTab(1)
+                
+                # Create new SD Explorer
+                self.sd_explorer = SDCardExplorer(self.exe_path)
+                self.sd_explorer.status_changed.connect(self._on_sd_explorer_status_changed)
+                
+                # Add to tab
+                self.tabs.addTab(self.sd_explorer, "SD Card Explorer")
+                self.tabs.setTabEnabled(1, True)
+    
+    def _on_sd_explorer_status_changed(self, message: str):
+        """Handle status updates from SD Explorer"""
+        print(f"SD Explorer: {message}")
+
 
 
 
@@ -445,17 +488,13 @@ class SC64MainWidget(QWidget):
     def check_firmware_update(self):
         print(f"Checking for firmware updates on system: {self.SYSTEM_NAME}")
         self.text_output.clear()
-        try:
-            # extracting version from firmware on sc64 cart:
-            self.start_worker(
-                "info",
-                "",
-                notify=True,
-                on_done=self.do_next_thing_firmware
-            )
-
-        except:
-            return None
+        # extracting version from firmware on sc64 cart:
+        self.start_worker(
+            "info",
+            "",
+            notify=True,
+            on_done=self.do_next_thing_firmware
+        )
 
 
 
@@ -530,6 +569,7 @@ class SC64MainWidget(QWidget):
                                 f.write(chunk)
 
                     self.latest_version = latest_version
+                    self._firmware_temp_path = temp_path
 
                     # running the firmware update command
                     self.start_worker("firmware", f"update {shlex.quote(temp_path)}", notify=True, on_done=self.confirm_update_message)
@@ -554,6 +594,12 @@ class SC64MainWidget(QWidget):
 
 
     def confirm_update_message(self):
+        # Clean up the temp firmware file
+        temp = getattr(self, '_firmware_temp_path', None)
+        if temp and os.path.exists(temp):
+            os.remove(temp)
+            self._firmware_temp_path = None
+
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Icon.Information)
         msg.setWindowTitle("Update check")
@@ -562,6 +608,12 @@ class SC64MainWidget(QWidget):
         msg.exec()
 
         self.latest_version = None
+
+    def _cleanup_sc64menu_temp(self):
+        temp = getattr(self, '_sc64menu_temp_path', None)
+        if temp and os.path.exists(temp):
+            os.remove(temp)
+            self._sc64menu_temp_path = None
 
     def check_deployer_update(self):
         print(f"Checking for updates on system: {self.SYSTEM_NAME}")
@@ -753,7 +805,8 @@ class SC64MainWidget(QWidget):
                                 f.write(chunk)
 
                     # save file (not asking for location, just overwrite)
-                    self.start_worker("sd", f"upload {shlex.quote(temp_path)} /sc64menu.n64", notify=True)
+                    self._sc64menu_temp_path = temp_path
+                    self.start_worker("sd", f"upload {shlex.quote(temp_path)} /sc64menu.n64", notify=True, on_done=self._cleanup_sc64menu_temp)
 
                     msg = QMessageBox(self)
                     msg.setIcon(QMessageBox.Icon.Information)
@@ -812,6 +865,7 @@ class SC64MainWidget(QWidget):
                 if not target_dir:
                     return  # user cancelled
 
+                zip_path = None
                 try:
                     # 2) Download zip
                     zip_path = self.download_zip(url)
@@ -843,6 +897,10 @@ class SC64MainWidget(QWidget):
                     err.setInformativeText(str(e))
                     err.setStandardButtons(QMessageBox.StandardButton.Ok)
                     err.exec()
+
+                finally:
+                    if zip_path and os.path.exists(zip_path):
+                        os.remove(zip_path)
 
             return
 
@@ -958,6 +1016,10 @@ class SC64MainWindow():
         settings.beginGroup("MainWindow")
         self.main_widget.exe_path = settings.value("exe_path", None)
         self.window.resize(settings.value("size", QSize(800, 600)))
+        
+        # If exe_path was saved, initialize it
+        if self.main_widget.exe_path:
+            self.main_widget.check_set_exe()
     
     
     ### END SETTINGS PART ###
