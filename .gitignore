@@ -1,0 +1,10 @@
+*.exe
+TODO.md
+__pycache__/
+/build
+/dist
+sc64deployer
+camera_rom.gbc
+camera_rom.sav
+/documentation
+*._*
