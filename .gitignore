@@ -7,4 +7,5 @@ __pycache__/
 sc64deployer
 camera_rom.gbc
 camera_rom.sav
-*/documentation/*
+/documentation
+._*

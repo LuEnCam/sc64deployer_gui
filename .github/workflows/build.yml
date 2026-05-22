@@ -1,9 +1,9 @@
 name: Build Binaries
 
-"on":
+on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 jobs:
