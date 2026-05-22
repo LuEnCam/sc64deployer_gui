@@ -53,22 +53,12 @@ sc64deployer_gui/
 └── build/                           # PyInstaller build output
 ```
 
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [USER_MANUAL.md](USER_MANUAL.md) | End-user guide |
-| [SD_EXPLORER_QUICKSTART.md](SD_EXPLORER_QUICKSTART.md) | Quick start for the SD Card Explorer |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture overview |
-| [ARCHITECTURE_SD_EXPLORER.md](ARCHITECTURE_SD_EXPLORER.md) | SD Explorer architecture details |
-| [DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md) | Full documentation navigation guide |
-
 ## Platform Notes
 
 | Platform | Notes |
 |----------|-------|
 | Windows  | File dialog filters `*.exe`; executable named `sc64deployer.exe` |
-| Linux    | Prepends `sudo -n` to all commands (see [Notes.md](Notes.md) for sudoers setup) |
+| Linux    | Prepends `sudo -n` to all commands (see [Notes_for_linux_users.md](Notes_for_linux_users.md) for sudoers setup) |
 | macOS    | Native file promise drag & drop support |
 
 ## License
