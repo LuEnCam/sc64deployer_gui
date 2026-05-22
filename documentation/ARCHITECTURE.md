@@ -25,10 +25,13 @@ pip install PyQt6 requests packaging
 ```
 sc64deployer_gui/
 ├── main.py                          # Application entry point, UI, update logic
+├── sd_explorer.py                   # SD Card file explorer widget (tree, drag & drop)
 ├── exec_runner.py                   # Background worker for subprocess execution
 ├── sc64_lists_command_options.py     # Data-driven command/option/parameter definitions
+├── sc64deployer_gui.spec            # PyInstaller build spec
+├── 64dd_ipl/                        # 64DD IPL files
 ├── Notes.md                         # Linux sudoers setup notes
-├── README.md                        # Project description (minimal)
+├── README.md                        # Project overview and quick start
 └── USER_MANUAL.md                   # End-user manual
 ```
 
@@ -42,11 +45,13 @@ Contains two classes:
 
 The central widget. Responsible for:
 
+- **Tab interface** — uses `QTabWidget` with a Commands tab and an SD Card Explorer tab.
 - **Dynamic UI generation** — iterates `list_of_commands`, `list_of_options`, and `list_of_parameters` to create buttons and input controls at runtime.
 - **Command composition** — assembles a CLI invocation string from the selected command, options, and parameters. Uses `shlex.quote()` for argument escaping.
 - **Process management** — creates `ExecWorker` + `QThread` pairs for each invocation; enforces single-command-at-a-time execution.
 - **Update checking** — queries GitHub Releases API for `sc64deployer`, `sc64menu.n64`, and SC64 firmware; downloads, extracts, and applies updates.
 - **sc64menu version detection** — downloads `sc64menu.n64` from the SD card and scans for hard-coded hex patterns to extract an embedded build date.
+- **SD Explorer integration** — initializes `SDCardExplorer` when a valid deployer is selected and adds it as a tab.
 
 #### `SC64MainWindow`
 
@@ -83,6 +88,44 @@ Data definitions that drive the UI:
 - **`list_of_commands`** — `[name, description]` pairs for all supported `sc64deployer` commands.
 - **`list_of_options`** — `[command, option_flag, arg_count, Types, description]` tuples. The UI generates option buttons scoped to the selected command.
 - **`list_of_parameters`** — `[command, option_flag, [values]]` tuples for radio-style choices (save types, TV types).
+
+### sd_explorer.py (~1,150 lines)
+
+The SD Card file explorer, integrated as a tab in the main window via `QTabWidget`.
+
+#### `SDCardExplorer(QWidget)`
+
+Tree-based file browser for the SC64's SD card. Provides:
+
+- **File tree display** — `QTreeWidget` with Name, Type, and Size columns.
+- **Navigation** — double-click folders, ".." parent traversal, manual path entry.
+- **File operations** — download, upload, rename, delete via `SDOperationWorker`.
+- **Drag & drop** — platform-specific implementation:
+  - macOS: native file promises (`_SDFilePromiseDelegate`, `_NativeDragSource`) for instant drag start with lazy download.
+  - Windows/Linux: `_LazyDownloadMimeData` for on-demand file download during drop.
+- **Context menu** — right-click for quick actions on selected items.
+
+**Signals:**
+- `operation_completed()` — emitted when any SD operation finishes
+- `status_changed(str)` — status updates forwarded to the main window status bar
+
+#### `SDOperationWorker(QObject)`
+
+Async subprocess executor for SD card commands. Runs `sc64deployer sd <subcommand> <args>` on a `QThread`, emitting `output`, `error`, and `finished` signals.
+
+#### `SDFileItem`
+
+Data class representing an SD card entry: `name`, `path`, `is_dir`, `size`, `children`.
+
+#### `SDOperationType` (Enum)
+
+Operation identifiers: `LIST`, `DOWNLOAD`, `UPLOAD`, `RENAME`, `DELETE`, `MKDIR`.
+
+#### Integration with `main.py`
+
+`SC64MainWidget._init_sd_explorer()` creates an `SDCardExplorer` instance and adds it as the second tab. The explorer's `status_changed` signal is connected to the main window's status bar.
+
+> For detailed architecture diagrams, see [ARCHITECTURE_SD_EXPLORER.md](ARCHITECTURE_SD_EXPLORER.md).
 
 ## Data Flow
 

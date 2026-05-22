@@ -18,6 +18,123 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, List, Callable
 
+# macOS native file promise support (for instant drag-to-Finder)
+_HAS_FILE_PROMISES = False
+if sys.platform == "darwin":
+    try:
+        import objc
+        from Foundation import NSObject, NSOperationQueue
+        from AppKit import NSFilePromiseProvider, NSDraggingItem, NSApplication, NSImage, NSWorkspace
+        _HAS_FILE_PROMISES = True
+    except ImportError:
+        pass
+
+if _HAS_FILE_PROMISES:
+    class _SDFilePromiseDelegate(NSObject):
+        """macOS delegate that downloads the file only when the drop target accepts it."""
+
+        def initWithExePath_sdPath_filename_(self, exe_path, sd_path, filename):
+            self = objc.super(_SDFilePromiseDelegate, self).init()
+            if self is None:
+                return None
+            self._exe_path = exe_path
+            self._sd_path = sd_path
+            self._filename = filename
+            return self
+
+        def filePromiseProvider_fileNameForType_(self, provider, uti):
+            return self._filename
+
+        def filePromiseProvider_writePromiseToURL_completionHandler_(self, provider, url, handler):
+            """Called by the OS when the drop target requests the actual file."""
+            dest_path = url.path()
+            cmd = [self._exe_path, "sd", "download", self._sd_path, dest_path]
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0:
+                    handler(None)
+                else:
+                    from Foundation import NSError
+                    error = NSError.errorWithDomain_code_userInfo_(
+                        "com.sd-explorer", 1,
+                        {"NSLocalizedDescription": result.stderr or "Download failed"}
+                    )
+                    handler(error)
+            except Exception as e:
+                from Foundation import NSError
+                error = NSError.errorWithDomain_code_userInfo_(
+                    "com.sd-explorer", 2,
+                    {"NSLocalizedDescription": str(e)}
+                )
+                handler(error)
+
+        def operationQueueForFilePromiseProvider_(self, provider):
+            # Use a background queue so UI stays responsive during download
+            queue = NSOperationQueue.alloc().init()
+            queue.setQualityOfService_(0x09)  # NSQualityOfServiceUserInitiated
+            return queue
+
+    class _NativeDragSource(NSObject):
+        """macOS NSDraggingSource protocol implementation."""
+
+        def draggingSession_sourceOperationMaskForDraggingContext_(self, session, context):
+            from AppKit import NSDragOperationCopy, NSDragOperationMove
+            if context == 0:  # WithinApplication
+                return NSDragOperationMove
+            return NSDragOperationCopy  # OutsideApplication
+
+
+class _LazyDownloadMimeData(QMimeDataCore):
+    """QMimeData subclass that downloads the SD file on-demand (at drop time).
+
+    Works like macOS file promises: the drag starts instantly, and the actual
+    download only happens when the drop target requests the file content.
+    """
+
+    def __init__(self, exe_path: str, sd_path: str, filename: str, sd_mime_type: str):
+        super().__init__()
+        self._exe_path = exe_path
+        self._sd_path = sd_path
+        self._filename = filename
+        self._temp_dir = None
+        self._temp_file = None
+        self._downloaded = False
+        # Store internal SD path for internal move detection
+        self.setData(sd_mime_type, sd_path.encode('utf-8'))
+
+    def hasFormat(self, mimeType: str) -> bool:
+        if mimeType == "text/uri-list":
+            return True
+        return super().hasFormat(mimeType)
+
+    def formats(self):
+        fmts = super().formats()
+        if "text/uri-list" not in fmts:
+            fmts.append("text/uri-list")
+        return fmts
+
+    def retrieveData(self, mimeType, preferredType):
+        if mimeType == "text/uri-list":
+            if not self._downloaded:
+                self._do_download()
+            if self._temp_file and os.path.exists(self._temp_file):
+                return [QUrl.fromLocalFile(self._temp_file)]
+            return []
+        return super().retrieveData(mimeType, preferredType)
+
+    def _do_download(self):
+        self._temp_dir = tempfile.mkdtemp(prefix="sd_drag_")
+        self._temp_file = os.path.join(self._temp_dir, self._filename)
+        cmd = [self._exe_path, "sd", "download", self._sd_path, self._temp_file]
+        if sys.platform.startswith("linux"):
+            cmd = ['sudo', '-n'] + cmd
+        subprocess.run(cmd, capture_output=True)
+        self._downloaded = True
+
+    @property
+    def temp_dir(self):
+        return self._temp_dir
+
 
 class SDOperationType(Enum):
     LIST = "list"
@@ -111,6 +228,10 @@ class SDCardExplorer(QWidget):
         self.worker = None
         self.pc_pending_upload = None  # Track PC file pending upload via drag & drop
         self.current_listing = []  # Store parsed SD card file listing
+        self._temp_drag_files = []  # Track temp files created during drag operations
+        self._active_native_drag_path = None  # Track native drag source for internal moves
+        self._promise_delegate = None  # prevent GC of native objects
+        self._drag_source = None
 
         self._init_ui()
         self._refresh_sd_contents()
@@ -465,34 +586,142 @@ class SDCardExplorer(QWidget):
     SD_MIME_TYPE = "application/x-sd-card-path"
 
     def _start_drag(self, supportedActions):
-        """Start a drag operation with SD card path info"""
+        """Start a drag operation — uses native file promises on macOS for instant start"""
         item = self.file_tree_widget.currentItem()
         if not item or item.text(0) == "..":
             return
 
         name = item.text(0)
+        ftype = item.text(1)
         sd_path = f"{self.current_path.rstrip('/')}/{name}"
 
+        # On macOS with PyObjC: use native file promises for files.
+        # The drag starts instantly; download only happens when the drop target accepts it.
+        if _HAS_FILE_PROMISES and ftype != "folder":
+            self._active_native_drag_path = sd_path
+            self._start_native_drag_macos(sd_path, name)
+            return
+
+        # Windows/Linux: use lazy QMimeData (file downloaded only at drop time)
+        if ftype != "folder":
+            mime_data = _LazyDownloadMimeData(
+                self.exe_path, sd_path, name, self.SD_MIME_TYPE
+            )
+            drag = QDrag(self.file_tree_widget)
+            drag.setMimeData(mime_data)
+            drag.exec(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction)
+            # Track temp dir for cleanup
+            if mime_data.temp_dir:
+                self._temp_drag_files.append(mime_data.temp_dir)
+            return
+
+        # Fallback for folders: internal MIME only
         mime_data = QMimeDataCore()
         mime_data.setData(self.SD_MIME_TYPE, sd_path.encode('utf-8'))
-
         drag = QDrag(self.file_tree_widget)
         drag.setMimeData(mime_data)
-        drag.exec(Qt.DropAction.MoveAction)
+        drag.exec(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction)
+
+    def _start_native_drag_macos(self, sd_path: str, filename: str):
+        """Start a native macOS drag session with file promise (instant, non-blocking)."""
+        from Foundation import NSRect, NSPoint, NSSize
+        from AppKit import NSPasteboardItem
+        import ctypes
+
+        # Create file promise delegate — download happens only on drop
+        delegate = _SDFilePromiseDelegate.alloc().initWithExePath_sdPath_filename_(
+            self.exe_path, sd_path, filename
+        )
+        self._promise_delegate = delegate  # prevent GC
+
+        # Create file promise provider with generic UTI
+        provider = NSFilePromiseProvider.alloc().initWithFileType_delegate_(
+            "public.data", delegate
+        )
+
+        # Create dragging item
+        dragging_item = NSDraggingItem.alloc().initWithPasteboardWriter_(provider)
+
+        # Set drag image — use file icon from the system
+        ext = filename.rsplit('.', 1)[-1] if '.' in filename else ""
+        icon = NSWorkspace.sharedWorkspace().iconForFileType_(ext)
+        icon.setSize_(NSSize(32, 32))
+        frame = NSRect(NSPoint(0, 0), NSSize(32, 32))
+        dragging_item.setDraggingFrame_contents_(frame, icon)
+
+        # Get the native NSView from our Qt widget
+        view_id = int(self.file_tree_widget.winId())
+        ns_view = objc.objc_object(c_void_p=ctypes.c_void_p(view_id))
+
+        # Get current mouse event
+        event = NSApplication.sharedApplication().currentEvent()
+
+        # Create drag source
+        source = _NativeDragSource.alloc().init()
+        self._drag_source = source  # prevent GC
+
+        # Start the native drag session (returns immediately, non-blocking)
+        ns_view.beginDraggingSessionWithItems_event_source_(
+            [dragging_item], event, source
+        )
+
+    def cleanup_temp_files(self):
+        """Remove temporary files created during drag operations"""
+        import shutil
+        for temp_dir in self._temp_drag_files:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        self._temp_drag_files.clear()
 
     def _drag_enter_event(self, event):
         """Handle drag enter event for both internal and external drops"""
-        if event.mimeData().hasFormat(self.SD_MIME_TYPE) or event.mimeData().hasUrls():
+        if (event.mimeData().hasFormat(self.SD_MIME_TYPE)
+                or event.mimeData().hasUrls()
+                or self._active_native_drag_path):
             event.acceptProposedAction()
 
     def _drag_move_event(self, event):
         """Accept drag move events for both internal and external drops"""
-        if event.mimeData().hasFormat(self.SD_MIME_TYPE) or event.mimeData().hasUrls():
+        if (event.mimeData().hasFormat(self.SD_MIME_TYPE)
+                or event.mimeData().hasUrls()
+                or self._active_native_drag_path):
             event.acceptProposedAction()
 
     def _drop_event(self, event):
-        """Handle drop: internal SD move or external PC file upload"""
+        """Handle drop: internal SD move, native drag return, or external PC file upload"""
         mime = event.mimeData()
+
+        # Handle our own native drag dropped back onto the explorer (internal move)
+        if self._active_native_drag_path:
+            source_path = self._active_native_drag_path
+            self._active_native_drag_path = None
+            source_name = source_path.rsplit('/', 1)[-1]
+
+            target_item = self.file_tree_widget.itemAt(event.position().toPoint())
+            if target_item and target_item.text(1) == "folder":
+                if target_item.text(0) == "..":
+                    parts = self.current_path.rstrip("/").rsplit("/", 1)
+                    target_dir = parts[0] if parts[0] else "/"
+                else:
+                    target_dir = f"{self.current_path.rstrip('/')}/{target_item.text(0)}"
+            else:
+                target_dir = self.current_path.rstrip('/')
+
+            dest_path = f"{target_dir}/{source_name}"
+            if dest_path == source_path:
+                return
+
+            reply = QMessageBox.question(
+                self, "Move File",
+                f"Move '{source_name}' to '{target_dir}/'?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._execute_sd_operation(
+                    "mv", [source_path, dest_path],
+                    f"Moved: {source_name} → {target_dir}/"
+                )
+            event.acceptProposedAction()
+            return
 
         if mime.hasFormat(self.SD_MIME_TYPE):
             # Internal SD card move

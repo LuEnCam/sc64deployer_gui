@@ -937,6 +937,12 @@ class SC64MainWidget(QWidget):
         elif tarfile.is_tarfile(archive_path):
             # tarfile auto-detects gzip, bzip2, etc.
             with tarfile.open(archive_path, "r:*") as tf:
+                # Validate member paths to prevent directory traversal (CVE-2007-4559)
+                import os
+                for member in tf.getmembers():
+                    member_path = os.path.join(target_dir, member.name)
+                    if not os.path.realpath(member_path).startswith(os.path.realpath(target_dir)):
+                        raise ValueError(f"Tar member '{member.name}' would escape target directory")
                 tf.extractall(target_dir)
         else:
             raise ValueError(f"File '{archive_path}' is not a valid zip or tar archive")

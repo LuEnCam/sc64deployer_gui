@@ -84,10 +84,39 @@ Refer to the option list in `sc64_lists_command_options.py` for precise option n
   2. Enter/select the SD path and choose a local destination via the "Save File As..." control.
   3. Click `Run Command`.
 
+## SD Card Explorer
+
+The **SD Card Explorer** tab provides a dedicated file browser for the SC64's SD card. It appears automatically once a valid `sc64deployer` binary is selected.
+
+### Navigation
+- The file tree displays **Name**, **Type**, and **Size** columns.
+- Double-click a folder to enter it; double-click `..` to go up.
+- Type a path directly in the navigation bar and press Enter to jump to any directory.
+
+### File Operations
+- **Upload** — click the Upload button or drag files from your computer into the tree.
+- **Download** — select a file and click Download, or drag a file out of the tree to your desktop/Finder/Explorer.
+- **Rename** — select a file and click Rename (or right-click → Rename). Enter the new name in the dialog.
+- **Delete** — select a file and click Delete (or right-click → Delete). Confirm the deletion when prompted.
+- **Create Folder** — right-click in empty space → Create Folder.
+
+### Drag & Drop
+- **Drag files in** (upload): drag files from Finder/Explorer into the SD Card Explorer tree.
+- **Drag files out** (download):
+  - **macOS**: uses native file promises — the drag starts instantly and the file is downloaded lazily when dropped.
+  - **Windows/Linux**: uses on-demand download — the file is fetched when the drop target requests data.
+
+### Context Menu
+Right-click any item for quick access to Download, Rename, and Delete.
+
+### Status & Progress
+A progress bar and status label at the bottom of the tab show the current operation (listing, uploading, downloading, etc.).
+
 ## Update Checking
 - The `Help` menu contains actions to verify updates:
-  - Verify update for `sc64deployer` — checks GitHub releases and prompts to download and extract a new release.
-  - Verify update for `sc64menu.n64` — downloads `sc64menu.n64` from releases and can upload it to the SD card.
+  - **Verify update for sc64deployer** — checks GitHub releases and prompts to download and extract a new release.
+  - **Verify update for sc64menu.n64** — downloads `sc64menu.n64` from releases and can upload it to the SD card.
+  - **Verify update for firmware** — compares the device's current firmware version against the latest GitHub release and offers to apply the update (auto-confirms the flash prompt).
 - When an update is available the app can download archives and extract them to a user-chosen folder.
 
 ## Logs & Errors
@@ -119,6 +148,7 @@ A: Use `Help` → *Verify update for sc64menu.n64*, confirm the download, and al
 
 ## Developer Notes (for contributors)
 - Main UI: `main.py` — contains `SC64MainWidget` (UI logic) and `SC64MainWindow` (app bootstrap).
+- SD Explorer: `sd_explorer.py` — `SDCardExplorer` widget, `SDOperationWorker`, `SDFileItem` data class, and platform-specific drag & drop classes.
 - Commands/options: `sc64_lists_command_options.py` — central listing used to build command and option buttons.
 - Worker: `exec_runner.py` provides `ExecWorker` used to run the external `sc64deployer` binary on a background thread.
 - Updating behavior: GitHub API endpoints are configured in `main.py` constants `SC64_GITHUB_API_LATEST` and `SC64MENU_GITHUB_API_LATEST`.

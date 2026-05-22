@@ -1,14 +1,4 @@
-I'll help you analyze the SD options in this project. Let me first explore the codebase to understand what SD options are available.   
-
-Searched for regex `SD|sd.*option|option.*sd`, 20 results
-
-Read [](file:///c%3A/Users/PC/Documents/GitHub/sc64deployer_gui/sc64_lists_command_options.py#1-1), lines 1 to 100
-
-Read [](file:///c%3A/Users/PC/Documents/GitHub/sc64deployer_gui/ARCHITECTURE.md#1-1), lines 1 to 50
-
-Read [](file:///c%3A/Users/PC/Documents/GitHub/sc64deployer_gui/sc64_lists_command_options.py#72-72), lines 72 to 90
-
-Searched for text `PATH_SD|PATH_PC_SD|PATH_SD_PC|PATH_SD_DUO`, 14 results
+I'll help you analyze the SD options in this project. Let me first explore the codebase to understand what SD options are available.
 
 ## Analysis of SD Card Options
 

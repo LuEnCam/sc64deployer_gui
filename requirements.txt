@@ -1,0 +1,4 @@
+PyQt6
+requests
+packaging
+pyobjc-framework-Cocoa; sys_platform == "darwin"
