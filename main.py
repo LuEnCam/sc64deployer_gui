@@ -263,9 +263,9 @@ class SC64MainWidget(QWidget):
                         fdOptions = QFileDialog.Option.ShowDirsOnly
                         #btn.clicked.connect(lambda _,: self.run_command(command, f"{option[1]} {QFileDialog.getSaveFileName(self, "ROM selection", "All Files(*);;Text Files(*.txt)", options = fdOptions)[0]}") if command else "")                
                         if line_edit_of_rom:
-                            btn.clicked.connect(lambda _,: self.enable_run_button(command, f"{option[1]} {shlex.quote(QFileDialog.getOpenFileName(self, "File selection", '')[0])} {shlex.quote(line_edit_of_rom.text())}") if command else "")   
+                            btn.clicked.connect(lambda _,: self.enable_run_button(command, f"{option[1]} {shlex.quote(QFileDialog.getOpenFileName(self, 'File selection', '')[0])} {shlex.quote(line_edit_of_rom.text())}") if command else "")   
                         else:
-                            btn.clicked.connect(lambda _,: self.enable_run_button(command, f"{option[1]} {shlex.quote(QFileDialog.getOpenFileName(self, "File selection", '')[0])}") if command else "")                
+                            btn.clicked.connect(lambda _,: self.enable_run_button(command, f"{option[1]} {shlex.quote(QFileDialog.getOpenFileName(self, 'File selection', '')[0])}") if command else "")                
                     elif type_of_param == Types.PATH_SET_LOCATION:
                         btn = QPushButton("Save File As...")
                         btn.setToolTip(option[4])
