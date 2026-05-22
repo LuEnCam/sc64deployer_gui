@@ -3,7 +3,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem, 
     QPushButton, QLineEdit, QLabel, QMessageBox, QInputDialog, QFileDialog,
-    QMenu, QAbstractItemView, QProgressBar, QHeaderView
+    QMenu, QAbstractItemView, QProgressBar, QHeaderView, QProgressDialog, QApplication
 )
 from PyQt6.QtGui import QIcon, QDrag, QFont, QColor, QBrush
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QUrl, QMimeData as QMimeDataCore
@@ -12,6 +12,8 @@ import subprocess
 import sys
 import shlex
 import os
+import tempfile
+import time
 from enum import Enum
 from pathlib import Path
 from typing import Optional, List, Callable
@@ -144,11 +146,13 @@ class SDCardExplorer(QWidget):
         self.file_tree_widget.customContextMenuRequested.connect(self._show_context_menu)
         self.file_tree_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.file_tree_widget.setAcceptDrops(True)
-        self.file_tree_widget.dragEnterEvent = self._drag_enter_event
-        self.file_tree_widget.dropEvent = self._drop_event
-        
-        # Enable drag for items
         self.file_tree_widget.setDragEnabled(True)
+        self.file_tree_widget.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.file_tree_widget.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.file_tree_widget.dragEnterEvent = self._drag_enter_event
+        self.file_tree_widget.dragMoveEvent = self._drag_move_event
+        self.file_tree_widget.dropEvent = self._drop_event
+        self.file_tree_widget.startDrag = self._start_drag
 
         # Resize columns
         header = self.file_tree_widget.header()
@@ -177,10 +181,6 @@ class SDCardExplorer(QWidget):
         self.delete_btn.clicked.connect(self._delete_file)
         button_layout.addWidget(self.delete_btn)
 
-        self.mkdir_btn = QPushButton("New Folder")
-        self.mkdir_btn.clicked.connect(self._create_directory)
-        button_layout.addWidget(self.mkdir_btn)
-
         layout.addLayout(button_layout)
 
         # Progress bar
@@ -195,57 +195,92 @@ class SDCardExplorer(QWidget):
 
         self.setLayout(layout)
 
+    def _cleanup_previous_worker(self):
+        """Wait for any previous worker thread to finish before starting a new one."""
+        if self.worker_thread is not None:
+            self.worker_thread.quit()
+            self.worker_thread.wait()
+            self.worker_thread = None
+            self.worker = None
+
     def _refresh_sd_contents(self):
         """Refresh the file tree from the SD card"""
+        self._cleanup_previous_worker()
         self.status_changed.emit("Loading SD card contents...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate
         self.current_listing = []  # Clear previous listing
 
         self.worker_thread = QThread()
-        self.worker = SDOperationWorker(self.exe_path, "ls", [shlex.quote(self.current_path)])
+        self.worker = SDOperationWorker(self.exe_path, "ls", [self.current_path])
         self.worker.moveToThread(self.worker_thread)
 
         self.worker_thread.started.connect(self.worker.run)
         self.worker.output.connect(self._parse_ls_output)  # Connect output signal to parser
         self.worker.finished.connect(lambda: self._on_list_complete())
         self.worker.finished.connect(self.worker_thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
 
         self.worker_thread.start()
 
     def _parse_ls_output(self, line: str):
-        """Parse a single line from ls command output"""
+        """Parse a single line from ls command output.
+        
+        Format: d/f  SIZE  DATE TIME | /path/name
+        Examples:
+            d ---- 2025-01-23 10:49:36 | /.fseventsd
+            f 8.0M 1996-12-24 23:32:00 | AI Shougi 3 (Japan).n64
+        """
         line = line.strip()
         if not line:
             return
-        
-        # Parse output format from sc64deployer ls command
-        # Expected format: "filename" or filename (directory indicated by trailing /)
-        # or with size info: "filename size" for files
-        # For now, assume format: name [size] [type_indicator]
-        parts = line.split(None, 1)
-        if not parts:
+
+        # Split on the '|' separator
+        if '|' not in line:
             return
-        
-        name = parts[0].rstrip('/')
-        is_dir = line.endswith('/')
-        
-        # Try to extract size if available
-        size = 0
-        if len(parts) > 1 and not is_dir:
-            try:
-                size = int(parts[1].split()[0])
-            except (ValueError, IndexError):
-                pass
-        
+        meta, _, filepath = line.partition('|')
+        meta = meta.strip()
+        filepath = filepath.strip()
+
+        if not meta or not filepath:
+            return
+
+        # First token is type: 'd' or 'f'
+        parts = meta.split()
+        if len(parts) < 2:
+            return
+
+        entry_type = parts[0]
+        is_dir = (entry_type == 'd')
+        size_str = parts[1]  # e.g. '----', '8.0M', '103K', '0B'
+
+        # Parse size string to bytes
+        size = self._parse_size_string(size_str)
+
+        # Extract name from the path (last component)
+        name = filepath.rsplit('/', 1)[-1] if '/' in filepath else filepath
+
         self.current_listing.append({
             'name': name,
-            'path': f"{self.current_path.rstrip('/')}/{name}",
+            'path': filepath,
             'is_dir': is_dir,
             'size': size
         })
+
+    def _parse_size_string(self, s: str) -> int:
+        """Convert a human-readable size string (e.g. '8.0M', '103K', '0B') to bytes."""
+        if s == '----':
+            return 0
+        multipliers = {'B': 1, 'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4}
+        for suffix, mult in multipliers.items():
+            if s.endswith(suffix):
+                try:
+                    return int(float(s[:-1]) * mult)
+                except ValueError:
+                    return 0
+        try:
+            return int(s)
+        except ValueError:
+            return 0
 
     def _on_list_complete(self):
         """Handle completion of list operation"""
@@ -264,18 +299,12 @@ class SDCardExplorer(QWidget):
             parent_item.setIcon(0, self._get_icon("folder"))
             self.file_tree_widget.addTopLevelItem(parent_item)
 
-        # Add mock entries (would be populated from actual SD listing)
-        # This is a simplified version - in production, parse the ls output
-        example_items = [
-            ("roms", "folder", "-"),
-            ("saves", "folder", "-"),
-            ("game.z64", "file", "8.5 MB"),
-        ]
-
-        for name, ftype, size in example_items:
-            item = QTreeWidgetItem([name, ftype, size])
-            item.setData(0, Qt.ItemDataRole.UserRole, name)
-            icon = self._get_icon("folder" if ftype == "folder" else "file")
+        for entry in self.current_listing:
+            ftype = "folder" if entry['is_dir'] else "file"
+            size = "-" if entry['is_dir'] else self._format_size(entry['size'])
+            item = QTreeWidgetItem([entry['name'], ftype, size])
+            item.setData(0, Qt.ItemDataRole.UserRole, entry['name'])
+            icon = self._get_icon(ftype)
             item.setIcon(0, icon)
             self.file_tree_widget.addTopLevelItem(item)
 
@@ -351,8 +380,8 @@ class SDCardExplorer(QWidget):
         if save_path:
             self._execute_sd_operation(
                 "download",
-                [shlex.quote(f"{self.current_path.rstrip('/')}/{filename}"),
-                 shlex.quote(save_path)],
+                [f"{self.current_path.rstrip('/')}/{filename}",
+                 save_path],
                 f"Downloaded: {filename}"
             )
 
@@ -368,7 +397,7 @@ class SDCardExplorer(QWidget):
 
             self._execute_sd_operation(
                 "upload",
-                [shlex.quote(file_path), shlex.quote(dest_path)],
+                [file_path, dest_path],
                 f"Uploaded: {filename}"
             )
 
@@ -379,7 +408,7 @@ class SDCardExplorer(QWidget):
 
         self._execute_sd_operation(
             "upload",
-            [shlex.quote(pc_path), shlex.quote(dest_path)],
+            [pc_path, dest_path],
             f"Uploaded: {filename}"
         )
 
@@ -404,7 +433,7 @@ class SDCardExplorer(QWidget):
 
             self._execute_sd_operation(
                 "mv",
-                [shlex.quote(old_path), shlex.quote(new_path)],
+                [old_path, new_path],
                 f"Renamed: {old_name} → {new_name}"
             )
 
@@ -428,39 +457,102 @@ class SDCardExplorer(QWidget):
             file_path = f"{self.current_path.rstrip('/')}/{filename}"
             self._execute_sd_operation(
                 "rm",
-                [shlex.quote(file_path)],
+                [file_path],
                 f"Deleted: {filename}"
             )
 
-    def _create_directory(self):
-        """Create a new directory"""
-        dir_name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
+    # Custom MIME type for internal SD card drag & drop
+    SD_MIME_TYPE = "application/x-sd-card-path"
 
-        if ok and dir_name:
-            # Note: SD card operations might not support mkdir directly
-            # This would depend on the sc64deployer tool capabilities
-            QMessageBox.information(
-                self, "Info",
-                "Folder creation via mkdir may not be supported by sc64deployer.\n"
-                "Please create folders through other means."
-            )
+    def _start_drag(self, supportedActions):
+        """Start a drag operation with SD card path info"""
+        item = self.file_tree_widget.currentItem()
+        if not item or item.text(0) == "..":
+            return
+
+        name = item.text(0)
+        sd_path = f"{self.current_path.rstrip('/')}/{name}"
+
+        mime_data = QMimeDataCore()
+        mime_data.setData(self.SD_MIME_TYPE, sd_path.encode('utf-8'))
+
+        drag = QDrag(self.file_tree_widget)
+        drag.setMimeData(mime_data)
+        drag.exec(Qt.DropAction.MoveAction)
 
     def _drag_enter_event(self, event):
-        """Handle drag enter event for file drops"""
-        if event.mimeData().hasUrls():
+        """Handle drag enter event for both internal and external drops"""
+        if event.mimeData().hasFormat(self.SD_MIME_TYPE) or event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def _drag_move_event(self, event):
+        """Accept drag move events for both internal and external drops"""
+        if event.mimeData().hasFormat(self.SD_MIME_TYPE) or event.mimeData().hasUrls():
             event.acceptProposedAction()
 
     def _drop_event(self, event):
-        """Handle file drop event for uploads"""
-        if event.mimeData().hasUrls():
-            for url in event.mimeData().urls():
+        """Handle drop: internal SD move or external PC file upload"""
+        mime = event.mimeData()
+
+        if mime.hasFormat(self.SD_MIME_TYPE):
+            # Internal SD card move
+            source_path = bytes(mime.data(self.SD_MIME_TYPE)).decode('utf-8')
+            source_name = source_path.rsplit('/', 1)[-1]
+
+            # Determine target folder from the item under the cursor
+            target_item = self.file_tree_widget.itemAt(event.position().toPoint())
+            if target_item and target_item.text(1) == "folder":
+                if target_item.text(0) == "..":
+                    # Dropped on ".." → move to parent directory
+                    parts = self.current_path.rstrip("/").rsplit("/", 1)
+                    target_dir = parts[0] if parts[0] else "/"
+                else:
+                    target_dir = f"{self.current_path.rstrip('/')}/{target_item.text(0)}"
+            else:
+                # Dropped on a file or empty space → stay in current directory
+                target_dir = self.current_path.rstrip('/')
+
+            dest_path = f"{target_dir}/{source_name}"
+
+            if dest_path == source_path:
+                return  # No-op: same location
+
+            reply = QMessageBox.question(
+                self, "Move File",
+                f"Move '{source_name}' to '{target_dir}/'?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._execute_sd_operation(
+                    "mv",
+                    [source_path, dest_path],
+                    f"Moved: {source_name} → {target_dir}/"
+                )
+            event.acceptProposedAction()
+
+        elif mime.hasUrls():
+            # External file drop from OS → upload
+            target_item = self.file_tree_widget.itemAt(event.position().toPoint())
+            if target_item and target_item.text(1) == "folder" and target_item.text(0) != "..":
+                upload_dir = f"{self.current_path.rstrip('/')}/{target_item.text(0)}"
+            else:
+                upload_dir = self.current_path.rstrip('/')
+
+            for url in mime.urls():
                 pc_path = url.toLocalFile()
                 if os.path.isfile(pc_path):
-                    self._upload_file_from_pc_path(pc_path)
+                    filename = os.path.basename(pc_path)
+                    dest_path = f"{upload_dir}/{filename}"
+                    self._execute_sd_operation(
+                        "upload",
+                        [pc_path, dest_path],
+                        f"Uploaded: {filename}"
+                    )
             event.acceptProposedAction()
 
     def _execute_sd_operation(self, operation: str, args: List[str], success_message: str):
         """Execute an SD card operation in a background thread"""
+        self._cleanup_previous_worker()
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
         self.status_changed.emit(f"Executing: {operation}...")
@@ -472,8 +564,6 @@ class SDCardExplorer(QWidget):
         self.worker_thread.started.connect(self.worker.run)
         self.worker.finished.connect(lambda: self._on_operation_complete(success_message))
         self.worker.finished.connect(self.worker_thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
 
         self.worker_thread.start()
 
@@ -490,6 +580,16 @@ class SDCardExplorer(QWidget):
         if icon_type == "folder":
             return QIcon("folder")  # Would use system icons in production
         return QIcon("file")
+
+    def _format_size(self, size: int) -> str:
+        """Format byte size to human-readable string"""
+        if size <= 0:
+            return "0 B"
+        for unit in ("B", "KB", "MB", "GB"):
+            if size < 1024:
+                return f"{size:.1f} {unit}" if unit != "B" else f"{size} B"
+            size /= 1024
+        return f"{size:.1f} TB"
 
     def update_exe_path(self, new_exe_path: str):
         """Update the path to the sc64deployer executable"""

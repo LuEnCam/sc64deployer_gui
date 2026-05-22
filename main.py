@@ -389,7 +389,6 @@ class SC64MainWidget(QWidget):
 
         # Optional: prevent overlapping runs
         if self.worker_thread and self.worker_thread.isRunning():
-            self.append_error("A command is already running.")
             return
 
         args = shlex.split(options) if options else []
