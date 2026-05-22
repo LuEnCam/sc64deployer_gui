@@ -61,6 +61,11 @@ sc64deployer_gui/
 | Linux    | Prepends `sudo -n` to all commands (see [Notes_for_linux_users.md](Notes_for_linux_users.md) for sudoers setup) |
 | macOS    | Native file promise drag & drop support |
 
+## Related sources
+
+- SummerCart64: https://github.com/Polprzewodnikowy/SummerCart64
+- N64 Flashcart Menu: https://github.com/Polprzewodnikowy/N64FlashcartMenu
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
