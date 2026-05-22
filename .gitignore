@@ -3,9 +3,8 @@ TODO.md
 __pycache__/
 /build
 /dist
-*.spec
 sc64deployer
 camera_rom.gbc
 camera_rom.sav
 /documentation
-._*
+*._*
